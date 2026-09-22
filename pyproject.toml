@@ -1,0 +1,20 @@
+[project]
+name = "llm-lab"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+	"wandb>=0.21.0",
+]
+
+[project.scripts]
+llm-lab = "llm_lab:main"
+train = "llm_lab.train:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.extra-build-dependencies]
+flash-attn = ["torch"]

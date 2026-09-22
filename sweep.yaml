@@ -1,0 +1,90 @@
+# !! 設計見直し中（2026-09-21）!!
+#
+# 下の grid は max-steps を 300（= 1.03 epoch）に固定している。この条件には
+# 「同じデータの繰り返し」が存在しないため、weight decay を振っても
+# 記憶化の抑制効果は原理的に出ない。
+#
+# エポック・スケーリングの実測（291 step = 1 epoch）:
+#   300 step (1.03 ep) in-domain 2.321 / OOD 3.348
+#   600 step (2.06 ep) in-domain 2.317 / OOD 3.604   <- 2 周目の利得は 1.0σ = なし
+#  1200 step (4.12 ep) in-domain 2.576 / OOD 3.947   <- エポック境界ごとに階段状に悪化
+#
+# いま wd ∈ {0.01, 0.1} を 1200 step で回して「正則化が繰り返しを利得に
+# 変えられるか」を検証中（group: wd-rescue）。その結果が出るまで、この
+# grid は実行しないこと。
+
+# W&B Sweep 定義（Phase 3: rank × weight decay）。
+#
+#   source .venv/bin/activate
+#   wandb sweep sweep.yaml                       # -> sweep id が出る
+#   wandb agent <entity>/<project>/<sweep_id>
+#
+# 6 run / 1 run 約 23 分 / 合計 約 2.3 時間。
+#
+# --- 軸の選び方（2026-09-20 の LR 探索 10 run の結果に基づく） ---
+#
+# lr と target-modules は探索済みのため固定した。振っても答えが変わらないので、
+# その枠を未探索の weight decay に回している:
+#
+#   * lr: 5e-4 / 7e-4 / 1e-3 は eval/loss が 2.380 / 2.374 / 2.370（100 step）で、
+#     seed ノイズ σ≈0.004 に対し全て 1σ 以内。300 step でも 1e-3 と 7e-4 は
+#     2.327 vs 2.328 で同着。一方 2e-3 は +0.025（6σ）、3e-3 は +0.061（16σ）で
+#     明確に劣化し、5e-3 は発散（grad_norm 10.49 / eval 7.31）。
+#     -> 平坦域の上端である 1e-3 に固定。発散境界 3e-3 の 1/3 でもある。
+#
+#   * target-modules: attn 2.393 vs attn+mlp 2.357（9σ）。決着済みのため attn+mlp 固定。
+#
+# --- 判定ルール（回す前に決めておくこと） ---
+#
+# 同一条件・seed 違いの実測は 2.370 / 2.376 / 2.369（lr 1e-3, 100 step）で σ≈0.004。
+# したがって 3σ = 0.012 を下回る eval/loss 差は「差なし」と判定する。
+# ※ この σ は 100 step の反復から求めた値なので、300 step では近似。
+#   セルごとに誤差棒が要るなら seed を第 3 軸にする（6 -> 12 run）。
+#
+# lora-alpha は指定しない（既定で 2*r に追従）。alpha/r=2 を保つことで、
+# rank 間の比較に LoRA スケーリングの差が混入しないようにしている。
+#
+# パラメータ名は argparse のオプション名に合わせてハイフン区切りにしてある
+# （${args} が `--<name>=<value>` の形で渡すため。underscore にすると
+# `--lora_r` が生成され argparse が受け付けない）。
+program: main.py
+method: grid
+
+# 評価軸は 2 本（in-domain / OOD）。sweep の最適化対象は in-domain だが、
+# 選定時は eval/ood_loss の劣化が閾値内かを必ず併せて見ること。
+# ※ 2026-09-20 以前の run は metric 名が eval/loss なので、W&B 上で
+#   同じ系列には並ばない（値としては同じ eval セットの NLL）。
+metric:
+  name: eval/indomain_loss
+  goal: minimize
+
+parameters:
+  # --- 探索する軸 ---
+  lora-r:
+    values: [16, 64]
+  weight-decay:
+    values: [0.0, 0.01, 0.1]
+
+  # --- 探索済み・固定 ---
+  lr:
+    value: 1.0e-3
+  target-modules:
+    value: "attn+mlp"
+
+  # --- 比較の前提。全 run で固定する ---
+  max-steps:
+    value: 300
+  # warmup は絶対 15 step（= 300 * 0.05）。LR 探索の 100 step 系列と形を揃えてある。
+  # 旧 lora-sweep-v1 は warmup 9 step なので、そちらとは直接比較できない。
+  warmup-ratio:
+    value: 0.05
+  seed:
+    value: 42
+  wandb-group:
+    value: phase3-grid
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - ${args}

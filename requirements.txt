@@ -1,0 +1,18 @@
+# ローカル（WSL, RTX 4060 8GB）で動作確認した版に固定。2026-09-22
+#
+# torch は CUDA に合わせて別に入れる（このファイルには入れない）:
+#   ローカル: torch 2.11.0+cu130
+#   クラウド: uv pip install torch --index-url https://download.pytorch.org/whl/cu128   # Pod イメージの CUDA に合わせる
+#
+# vllm は torch を自分の版に pin するので同じ venv に入れない。使うなら別 venv か公式コンテナ。
+transformers==5.5.0
+trl==0.24.0
+peft==0.20.0
+datasets==4.3.0
+accelerate==1.14.0
+bitsandbytes==0.50.0
+kernels==0.12.3
+liger-kernel==0.8.3
+wandb==0.28.1
+python-dotenv==1.2.2
+openai==2.52.0
