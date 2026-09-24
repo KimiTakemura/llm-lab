@@ -418,6 +418,13 @@ def generate_hf(prompts: list[str], args, tokenizer, on_result=None) -> list[tup
         from peft import PeftModel
 
         model = PeftModel.from_pretrained(model, args.adapter)
+        # 既定でベース重みにマージする。LoRA 層のままだと forward ごとに
+        # result + lora_B(lora_A(x)) * scaling の一時テンソル（出力と同サイズ）が層ごとに積まれ、
+        # 素のモデルで通るバッチでも OOM する。W + BA*scaling は等価なので結果は変わらない。
+        # 4bit はマージで dequant が起きるため対象外
+        if args.merge_adapter and not args.load_in_4bit:
+            model = model.merge_and_unload()
+            print("アダプタをベース重みにマージしました", file=sys.stderr)
     model.eval()
     tokenizer.padding_side = "left"
     if tokenizer.pad_token_id is None:
@@ -665,6 +672,18 @@ def print_report(summary: dict) -> None:
 # --------------------------------------------------------------------------- main
 
 
+def _adapter_label(adapter: str) -> str:
+    """出力ディレクトリ名に使うアダプタの識別子。
+
+    checkpoint-170 のような名前は run をまたいで重複するので、親ディレクトリ（run 名）を前置する。
+    そうしないと r=16 と r=64 の checkpoint-170 が同じ出力先を指し、先の結果を上書きする。
+    """
+    path = Path(adapter.rstrip("/"))
+    if path.name.startswith("checkpoint-") and path.parent.name:
+        return f"{path.parent.name}-{path.name}"
+    return path.name
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="HBMSS peft-dataset の生成評価", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     g = p.add_argument_group("data")
@@ -678,6 +697,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     g.add_argument("--model-name", default="Qwen/Qwen3-4B")
     g.add_argument("--adapter", default=None, help="LoRA アダプタのディレクトリ（学習後の評価用）")
     g.add_argument("--load-in-4bit", action="store_true", help="bitsandbytes NF4 で読む（8 GB 機で 4B 以上を動かすとき）")
+    g.add_argument(
+        "--no-merge-adapter",
+        dest="merge_adapter",
+        action="store_false",
+        help="アダプタをベース重みにマージせず LoRA 層のまま推論する（4bit では既定でマージしない）",
+    )
     g.add_argument("--enable-thinking", action="store_true", help="Qwen3 の thinking モードで生成する（既定は空 <think> で非思考）")
     g.add_argument("--max-new-tokens", type=int, default=1024)
     g.add_argument("--temperature", type=float, default=0.0, help="0 で greedy")
@@ -712,10 +737,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = p.parse_args(argv)
     if args.run_name is None:
         base = args.model_name.rstrip("/").split("/")[-1]
-        if args.adapter:
-            base += "-" + Path(args.adapter).name
-        else:
-            base += "-zeroshot"
+        base += ("-" + _adapter_label(args.adapter)) if args.adapter else "-zeroshot"
         if args.enable_thinking:
             base += "-think"
         args.run_name = base

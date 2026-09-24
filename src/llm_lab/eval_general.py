@@ -30,7 +30,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from llm_lab.eval_hbmss import generate_hf, generate_openai, generate_vllm, parse_output
+from llm_lab.eval_hbmss import _adapter_label, generate_hf, generate_openai, generate_vllm, parse_output
 from llm_lab.ifeval_checks import JA_CHECKS, JA_PROBES, UNSUPPORTED, check_instruction, format_bleed
 
 IFEVAL_DATASET = "google/IFEval"
@@ -195,6 +195,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     g.add_argument("--model-name", default="Qwen/Qwen3-14B")
     g.add_argument("--adapter", default=None)
     g.add_argument("--load-in-4bit", action="store_true")
+    g.add_argument(
+        "--no-merge-adapter",
+        dest="merge_adapter",
+        action="store_false",
+        help="アダプタをベース重みにマージせず LoRA 層のまま推論する（4bit では既定でマージしない）",
+    )
     g.add_argument("--enable-thinking", action="store_true")
     g.add_argument("--max-new-tokens", type=int, default=1024, help="300 語以上を求める問があるので 1024 は必要")
     g.add_argument("--temperature", type=float, default=0.0)
@@ -222,7 +228,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = p.parse_args(argv)
     if args.run_name is None:
         base = args.model_name.rstrip("/").split("/")[-1]
-        base += "-" + Path(args.adapter).name if args.adapter else "-zeroshot"
+        base += ("-" + _adapter_label(args.adapter)) if args.adapter else "-zeroshot"
         args.run_name = base
     if args.output_dir is None:
         args.output_dir = f"./outputs/eval-general/{args.run_name}"
