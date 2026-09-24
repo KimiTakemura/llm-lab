@@ -94,6 +94,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     g.add_argument("--grad-accum", type=int, default=16)
+    g.add_argument(
+        "--no-group-by-length",
+        dest="group_by_length",
+        action="store_false",
+        help=(
+            "長さの近い例を同じバッチに集める（既定 on）。長さが 539〜3768 tok とばらつくため、"
+            "ランダム順だと各バッチが最長例までパディングされ、計算の 3〜4 割がパディングに消える。"
+            "バッチ構成が変わるので、比較する run 全体で揃えること"
+        ),
+    )
     g.add_argument("--optim", default=None, help="既定: 4bit なら paged_adamw_8bit、それ以外 adamw_torch")
     g.add_argument("--no-gradient-checkpointing", dest="gradient_checkpointing", action="store_false")
     g.add_argument("--no-liger", dest="liger", action="store_false", help="liger-kernel を使わない")
@@ -158,6 +168,7 @@ def build_wandb_config(args: argparse.Namespace, target_modules: list[str], tota
         "liger": args.liger,
         "effective_batch_size": effective_batch_size,
         "eval_batch_size": args.eval_batch_size,
+        "group_by_length": args.group_by_length,
         "max_length": args.max_length,
         "packing": False,
         "eval_size": args.eval_size,
@@ -248,6 +259,9 @@ def main(argv: list[str] | None = None) -> None:
         weight_decay=args.weight_decay,
         warmup_steps=args.warmup_steps,
         optim=args.optim,
+        # transformers v5 で group_by_length は train_sampling_strategy に統合された。
+        # 長さ列は持たせていないので、サンプラーが input_ids から自前で数える（2720 行なら一瞬）
+        train_sampling_strategy="group_by_length" if args.group_by_length else "random",
         # 4bit のときは TRL 側が prepare_model_for_kbit_training で checkpointing を有効化する
         gradient_checkpointing=args.gradient_checkpointing,
         gradient_checkpointing_kwargs={"use_reentrant": False},
