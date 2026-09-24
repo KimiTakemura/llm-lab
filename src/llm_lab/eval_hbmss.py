@@ -268,6 +268,30 @@ def char_f1(pred: str, gold: str) -> float:
     return 2 * prec * rec / (prec + rec)
 
 
+def _match_findings(pf: list[dict], gf: list[dict]) -> list[tuple[dict | None, dict]]:
+    """ruleId を使わずに予測と gold の findings を対応付ける。
+
+    subject（対象患者・日付）が一致するものを優先し、無ければ残りを順に割り当てる。
+    ruleId は入力から復元できない値なので、判定値の正しさを測るときは対応付けから外す。
+    """
+    used: set[int] = set()
+    pairs: list[tuple[dict | None, dict]] = []
+    for g in gf:
+        pick = None
+        for i, p in enumerate(pf):
+            if i not in used and _eq(p.get("subject"), g.get("subject")):
+                pick = i
+                break
+        if pick is None:
+            pick = next((i for i in range(len(pf)) if i not in used), None)
+        if pick is None:
+            pairs.append((None, g))
+        else:
+            used.add(pick)
+            pairs.append((pf[pick], g))
+    return pairs
+
+
 def _tags_ok(findings: list[dict]) -> bool:
     for f in findings:
         if not isinstance(f, dict):
@@ -321,6 +345,7 @@ def score_item(item: EvalItem, parsed: Parsed, vocab: list[str]) -> dict:
                 primary_subject_match=False,
                 primary_keys_match=False,
                 strict_match=False,
+                strict_match_no_ruleid=False,
                 tag_ok=False,
                 probable_causes_consistent=False,
             )
@@ -348,6 +373,16 @@ def score_item(item: EvalItem, parsed: Parsed, vocab: list[str]) -> dict:
                 strict = strict and p is not None and p.get("severity") == g["severity"] and _eq(p.get("subject"), g.get("subject"))
                 strict = strict and all(_eq(p.get(k), g.get(k)) for k in ("expected", "actual", "diff"))
         r["strict_match"] = bool(strict)
+
+        # ruleId を除いた strict。ruleId は入力のどこにも現れず（train/eval とも 0 件）、
+        # eval のシナリオ族が使う T-05/T-06/C-06/W-05/C-05 は学習に 1 件も無い。
+        # つまり strict_match は 396 件中 332 件で到達不能なので、判定値そのものを見る指標を別に持つ
+        strict_nr = len(pf) == len(gf)
+        if strict_nr:
+            for p, g in _match_findings(pf, gf):
+                strict_nr = strict_nr and p is not None and p.get("severity") == g["severity"] and _eq(p.get("subject"), g.get("subject"))
+                strict_nr = strict_nr and all(_eq(p.get(k), g.get(k)) for k in ("expected", "actual", "diff"))
+        r["strict_match_no_ruleid"] = bool(strict_nr)
 
         r["tag_ok"] = _tags_ok(pf)
         # ERR なら原因候補が要る、OK なら要らない、という契約の整合
@@ -551,6 +586,7 @@ METRIC_COLUMNS = {
         "primary_values_match",
         "primary_subject_match",
         "primary_keys_match",
+        "strict_match_no_ruleid",
         "strict_match",
         "ruleid_set_match",
         "tag_ok",
