@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -73,8 +74,43 @@ class EvalItem:
     rule: str | None = None  # gold findings[0] の ruleId。ruleId 別の集計に使う
 
 
-def load_items(data_dir: Path, files: list[str], limit: int | None) -> list[EvalItem]:
+def stratified_sample(records: list[dict], n: int, seed: int) -> list[dict]:
+    """(ファイル, シナリオ群, outcome) の比率を保ったまま n 件に絞る。
+
+    層ごとに seed 固定でシャッフルし、比率に応じた件数を取る。端数は層を大きい順に配る。
+    小さい層（H 群など）が消えないよう、各層から最低 1 件は残す。
+    """
+    buckets: dict[tuple, list[dict]] = defaultdict(list)
+    for r in records:
+        buckets[(r["file"], _scenario_group(r.get("scenario", "")), r.get("outcome"))].append(r)
+    total = len(records)
+    rng = random.Random(seed)
+    quota: dict[tuple, int] = {}
+    for k, v in buckets.items():
+        rng.shuffle(v)
+        quota[k] = max(1, round(n * len(v) / total))
+    # 丸めで n とずれるので、大きい層から増減して合わせる
+    order = sorted(buckets, key=lambda k: -len(buckets[k]))
+    while sum(quota.values()) > n:
+        for k in order:
+            if sum(quota.values()) <= n:
+                break
+            if quota[k] > 1:
+                quota[k] -= 1
+    while sum(quota.values()) < n:
+        for k in order:
+            if sum(quota.values()) >= n:
+                break
+            if quota[k] < len(buckets[k]):
+                quota[k] += 1
+    out = [r for k in order for r in buckets[k][: quota[k]]]
+    out.sort(key=lambda r: r["id"])
+    return out
+
+
+def load_items(data_dir: Path, files: list[str], limit: int | None, sample: int | None = None, sample_seed: int = 0) -> list[EvalItem]:
     items: list[EvalItem] = []
+    records: list[dict] = []
     for name in files:
         path = data_dir / "eval" / f"{name}.jsonl"
         n_records = 0
@@ -86,35 +122,43 @@ def load_items(data_dir: Path, files: list[str], limit: int | None) -> list[Eval
                     break
                 n_records += 1
                 rec = json.loads(line)
-                msgs = rec["messages"]
-                assistant_idx = [i for i, m in enumerate(msgs) if m["role"] == "assistant"]
-                for turn, i in enumerate(assistant_idx):
-                    gold = msgs[i]
-                    items.append(
-                        EvalItem(
-                            id=rec["id"],
-                            file=name,
-                            layer=rec["layer"],
-                            task_type=rec["task_type"],
-                            scenario=rec["scenario"],
-                            outcome=rec["outcome"],
-                            hard_negative=bool(rec.get("hard_negative")),
-                            hard_negative_direction=rec.get("hard_negative_direction") or None,
-                            turn=turn,
-                            is_final=(i == assistant_idx[-1]),
-                            prefix=msgs[:i],
-                            tools=rec.get("tools") or None,
-                            gold_content=gold.get("content") or "",
-                            gold_tool_calls=[
-                                {
-                                    "name": tc["function"]["name"],
-                                    "arguments": _loads_maybe(tc["function"]["arguments"]),
-                                }
-                                for tc in (gold.get("tool_calls") or [])
-                            ],
-                            rule=(rec.get("rule_ids") or [None])[0],
-                        )
-                    )
+                rec["file"] = name
+                records.append(rec)
+    if sample is not None and sample < len(records):
+        records = stratified_sample(records, sample, sample_seed)
+        print(f"層別抽出: {len(records)} レコード（seed {sample_seed}）", file=sys.stderr)
+
+    for rec in records:
+        name = rec["file"]
+        msgs = rec["messages"]
+        assistant_idx = [i for i, m in enumerate(msgs) if m["role"] == "assistant"]
+        for turn, i in enumerate(assistant_idx):
+            gold = msgs[i]
+            items.append(
+                EvalItem(
+                    id=rec["id"],
+                    file=name,
+                    layer=rec["layer"],
+                    task_type=rec["task_type"],
+                    scenario=rec["scenario"],
+                    outcome=rec["outcome"],
+                    hard_negative=bool(rec.get("hard_negative")),
+                    hard_negative_direction=rec.get("hard_negative_direction") or None,
+                    turn=turn,
+                    is_final=(i == assistant_idx[-1]),
+                    prefix=msgs[:i],
+                    tools=rec.get("tools") or None,
+                    gold_content=gold.get("content") or "",
+                    gold_tool_calls=[
+                        {
+                            "name": tc["function"]["name"],
+                            "arguments": _loads_maybe(tc["function"]["arguments"]),
+                        }
+                        for tc in (gold.get("tool_calls") or [])
+                    ],
+                    rule=(rec.get("rule_ids") or [None])[0],
+                )
+            )
     return items
 
 
@@ -764,6 +808,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     g.add_argument("--data-dir", default=DEFAULT_DATA_DIR, help="peft-dataset/data のパス（eval/ を含む）。環境変数 HBMSS_DATA_DIR でも指定可")
     g.add_argument("--files", nargs="*", default=FILES, choices=FILES)
     g.add_argument("--limit", type=int, default=None, help="ファイルごとの先頭 N レコードだけ使う（smoke test 用）")
+    g.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        help=(
+            "eval 全体から N レコードを層別抽出する。評価が全体コストの大半を占めるため、"
+            "反復中はこれで縮める。層は (ファイル, シナリオ群 S/K/H, gold outcome) で、"
+            "--sample-seed が同じなら run 間で同一の部分集合になる"
+        ),
+    )
+    g.add_argument("--sample-seed", type=int, default=0, help="--sample の抽出 seed。比較する run 全体で揃えること")
     g.add_argument("--forbidden-vocab", default=None, help="既定: <data-dir>/../harness/forbidden_vocabulary.json")
 
     g = p.add_argument_group("model")
@@ -778,7 +833,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="アダプタをベース重みにマージせず LoRA 層のまま推論する（4bit では既定でマージしない）",
     )
     g.add_argument("--enable-thinking", action="store_true", help="Qwen3 の thinking モードで生成する（既定は空 <think> で非思考）")
-    g.add_argument("--max-new-tokens", type=int, default=1024)
+    g.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=1536,
+        help=(
+            "2026-09-25 改訂の gold 回答は最大 1,425 tok。1024 だと 10.6% が打ち切られ、"
+            "モデルの良否に関係なく 0 点になる。比較する run 全体で同じ値にすること"
+        ),
+    )
     g.add_argument("--temperature", type=float, default=0.0, help="0 で greedy")
     g.add_argument("--top-p", type=float, default=0.95)
 
@@ -849,7 +912,7 @@ def main(argv: list[str] | None = None) -> None:
             f"  adapter_config.json がありません。シェル変数が空のまま展開されていないか確認してください"
         )
 
-    items = load_items(Path(args.data_dir), args.files, args.limit)
+    items = load_items(Path(args.data_dir), args.files, args.limit, args.sample, args.sample_seed)
     print(f"{len(items)} 件を評価（レコード {len({i.id for i in items})} 件）: backend={args.backend} model={args.model_name} adapter={args.adapter}", file=sys.stderr)
 
     # gold 側の自己検査。ここで禁止語彙に当たるなら採点側のバグか語彙リストの問題
