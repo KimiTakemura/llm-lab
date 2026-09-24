@@ -116,6 +116,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     g.add_argument("--logging-steps", type=int, default=5)
     g.add_argument("--no-eval-on-start", dest="eval_on_start", action="store_false")
     g.add_argument("--no-save-adapter", dest="save_adapter", action="store_false")
+    g.add_argument(
+        "--save-epochs",
+        action="store_true",
+        help=(
+            "エポック境界ごとにアダプタを保存する（checkpoint-<step>/）。1 回の学習で 1/2/3 epoch を"
+            "比較でき、エポック軸の探索に追加の学習コストがかからない。保存されるのは LoRA のみ"
+        ),
+    )
     g.add_argument("--output-dir", default=None, help="既定: ./outputs/<run-name>")
 
     g = p.add_argument_group("W&B")
@@ -175,6 +183,7 @@ def build_wandb_config(args: argparse.Namespace, target_modules: list[str], tota
         "seed": args.seed,
         "split_seed": args.split_seed,
         "save_adapter": args.save_adapter,
+        "save_epochs": args.save_epochs,
     }
 
 
@@ -270,7 +279,9 @@ def main(argv: list[str] | None = None) -> None:
         eval_steps=args.eval_steps,
         eval_on_start=args.eval_on_start,
         logging_steps=args.logging_steps,
-        save_strategy="no",
+        save_strategy="epoch" if args.save_epochs else "no",
+        # オプティマイザ状態は保存しない。再開用ではなく「そのエポック時点のアダプタで評価する」ため
+        save_only_model=True,
         bf16=args.bf16,
         use_cpu=not torch.cuda.is_available(),
         seed=args.seed,
