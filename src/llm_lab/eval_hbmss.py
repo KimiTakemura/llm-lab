@@ -35,7 +35,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from llm_lab.hbmss_data import DEFAULT_DATA_DIR
+from llm_lab.hbmss_data import DEFAULT_DATA_DIR, check_data_dir
 
 FILES = ["layer1_domain", "layer2_system_rules", "layer3_consistency", "trajectories_next_action"]
 STRUCTURED_TASKS = {"classify", "trace", "diagnose", "abstain", "next_action"}
@@ -108,7 +108,14 @@ def stratified_sample(records: list[dict], n: int, seed: int) -> list[dict]:
     return out
 
 
-def load_items(data_dir: Path, files: list[str], limit: int | None, sample: int | None = None, sample_seed: int = 0) -> list[EvalItem]:
+def load_items(
+    data_dir: Path,
+    files: list[str],
+    limit: int | None,
+    sample: int | None = None,
+    sample_seed: int = 0,
+    scenario_prefix: tuple[str, ...] | None = None,
+) -> list[EvalItem]:
     items: list[EvalItem] = []
     records: list[dict] = []
     for name in files:
@@ -124,6 +131,14 @@ def load_items(data_dir: Path, files: list[str], limit: int | None, sample: int 
                 rec = json.loads(line)
                 rec["file"] = name
                 records.append(rec)
+    # 絞り込みは層別抽出より先に行う。逆にすると、H のように全体の 1.6% しかない群は
+    # 比率を保ったまま数件まで削られてしまい、絞り込む意味がなくなる
+    if scenario_prefix:
+        records = [r for r in records if r.get("scenario", "").startswith(scenario_prefix)]
+        if not records:
+            raise SystemExit(f"シナリオが {'/'.join(scenario_prefix)} で始まるレコードがありません")
+        print(f"シナリオ絞り込み {'/'.join(scenario_prefix)}: {len(records)} レコード", file=sys.stderr)
+
     if sample is not None and sample < len(records):
         records = stratified_sample(records, sample, sample_seed)
         print(f"層別抽出: {len(records)} レコード（seed {sample_seed}）", file=sys.stderr)
@@ -819,6 +834,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     g.add_argument("--sample-seed", type=int, default=0, help="--sample の抽出 seed。比較する run 全体で揃えること")
+    g.add_argument(
+        "--scenario-prefix",
+        nargs="+",
+        default=None,
+        help=(
+            "シナリオ ID の先頭が一致するレコードだけを使う（例: H なら手書き held-out の 24 件）。"
+            "層別抽出は全体比率を保つので少数群は --sample で潰れる。その群だけ全件見たいときに使う"
+        ),
+    )
     g.add_argument("--forbidden-vocab", default=None, help="既定: <data-dir>/../harness/forbidden_vocabulary.json")
 
     g = p.add_argument_group("model")
@@ -875,6 +899,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.run_name is None:
         base = args.model_name.rstrip("/").split("/")[-1]
         base += ("-" + _adapter_label(args.adapter)) if args.adapter else "-zeroshot"
+        if args.scenario_prefix:
+            base += "-" + "".join(sorted(args.scenario_prefix))
         if args.enable_thinking:
             base += "-think"
         args.run_name = base
@@ -912,7 +938,14 @@ def main(argv: list[str] | None = None) -> None:
             f"  adapter_config.json がありません。シェル変数が空のまま展開されていないか確認してください"
         )
 
-    items = load_items(Path(args.data_dir), args.files, args.limit, args.sample, args.sample_seed)
+    # データの所在も同じ理由でモデルより先に確かめる。HBMSS_DATA_DIR の export を忘れると
+    # ローカル既定のパスに落ち、クラウドでは必ず失敗する
+    check_data_dir(Path(args.data_dir))
+
+    items = load_items(
+        Path(args.data_dir), args.files, args.limit, args.sample, args.sample_seed,
+        tuple(args.scenario_prefix) if args.scenario_prefix else None,
+    )
     print(f"{len(items)} 件を評価（レコード {len({i.id for i in items})} 件）: backend={args.backend} model={args.model_name} adapter={args.adapter}", file=sys.stderr)
 
     # gold 側の自己検査。ここで禁止語彙に当たるなら採点側のバグか語彙リストの問題
