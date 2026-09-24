@@ -838,7 +838,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=1536,
         help=(
-            "2026-09-25 改訂の gold 回答は最大 1,425 tok。1024 だと 10.6% が打ち切られ、"
+            "2026-09-25 改訂の gold 回答は最大 1,425 tok。1024 だと 1 割強が打ち切られ、"
             "モデルの良否に関係なく 0 点になる。比較する run 全体で同じ値にすること"
         ),
     )
