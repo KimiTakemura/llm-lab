@@ -124,6 +124,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "比較でき、エポック軸の探索に追加の学習コストがかからない。保存されるのは LoRA のみ"
         ),
     )
+    g.add_argument(
+        "--save-steps",
+        type=int,
+        default=None,
+        help=(
+            "N step ごとにアダプタを保存する（--save-epochs より優先）。"
+            "このデータでは heldout loss がエポック境界より手前で底を打つため、"
+            "エポック単位の保存では最良点を取り逃す"
+        ),
+    )
     g.add_argument("--output-dir", default=None, help="既定: ./outputs/<run-name>")
 
     g = p.add_argument_group("W&B")
@@ -184,6 +194,7 @@ def build_wandb_config(args: argparse.Namespace, target_modules: list[str], tota
         "split_seed": args.split_seed,
         "save_adapter": args.save_adapter,
         "save_epochs": args.save_epochs,
+        "save_steps": args.save_steps,
     }
 
 
@@ -281,7 +292,8 @@ def main(argv: list[str] | None = None) -> None:
         eval_steps=args.eval_steps,
         eval_on_start=args.eval_on_start,
         logging_steps=args.logging_steps,
-        save_strategy="epoch" if args.save_epochs else "no",
+        save_strategy="steps" if args.save_steps else ("epoch" if args.save_epochs else "no"),
+        save_steps=args.save_steps or 500,
         # オプティマイザ状態は保存しない。再開用ではなく「そのエポック時点のアダプタで評価する」ため
         save_only_model=True,
         bf16=args.bf16,
