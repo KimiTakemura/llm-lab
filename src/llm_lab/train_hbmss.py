@@ -84,6 +84,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     g.add_argument("--epochs", type=float, default=2.0, help="SFT なので epoch 単位。--max-steps > 0 ならそちらが優先")
     g.add_argument("--max-steps", type=int, default=-1, help="smoke test / step 固定比較用")
     g.add_argument("--batch-size", type=int, default=1, help="per_device_train_batch_size。長さ 4K なので 1 が基本")
+    g.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=1,
+        help=(
+            "per_device_eval_batch_size。学習と別に持つ理由: liger の fused CE は training モードでしか"
+            "効かず、eval では全 logits（seq × 語彙 152K）が実体化する。学習が通るバッチでも eval は OOM する"
+        ),
+    )
     g.add_argument("--grad-accum", type=int, default=16)
     g.add_argument("--optim", default=None, help="既定: 4bit なら paged_adamw_8bit、それ以外 adamw_torch")
     g.add_argument("--no-gradient-checkpointing", dest="gradient_checkpointing", action="store_false")
@@ -148,6 +157,7 @@ def build_wandb_config(args: argparse.Namespace, target_modules: list[str], tota
         "attn_impl": args.attn_impl,
         "liger": args.liger,
         "effective_batch_size": effective_batch_size,
+        "eval_batch_size": args.eval_batch_size,
         "max_length": args.max_length,
         "packing": False,
         "eval_size": args.eval_size,
@@ -229,7 +239,7 @@ def main(argv: list[str] | None = None) -> None:
     training_args = SFTConfig(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.eval_batch_size,
         gradient_accumulation_steps=args.grad_accum,
         num_train_epochs=args.epochs,
         max_steps=args.max_steps,
