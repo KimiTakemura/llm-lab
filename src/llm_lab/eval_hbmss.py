@@ -354,6 +354,7 @@ def score_item(item: EvalItem, parsed: Parsed, vocab: list[str]) -> dict:
                 intermediate_operation_match=False,
                 intermediate_value_match=False,
                 intermediate_operands_match=False,
+                intermediate_consistent=None,
                 copied_observation=None,
             )
             r["forbidden_hits"] = count_forbidden([parsed.content], vocab, ctx)
@@ -399,6 +400,11 @@ def score_item(item: EvalItem, parsed: Parsed, vocab: list[str]) -> dict:
             r["intermediate_operation_match"] = bool(pi) and pi.get("operation") == gi.get("operation")
             r["intermediate_value_match"] = bool(pi) and _eq(pi.get("value"), gi.get("value"))
             r["intermediate_operands_match"] = bool(pi) and _eq(pi.get("operands"), gi.get("operands"))
+            # gold では intermediate.value と findings[0].expected が常に一致する（2,971/2,971）。
+            # 予測が自分の再計算結果を判定に使っているかを見る指標。もっともらしい intermediate を
+            # 出しておきながら expected には観測値を書く、という振る舞いをここで検出する
+            if pi and pp and pi.get("value") is not None:
+                r["intermediate_consistent"] = _eq(pi.get("value"), pp.get("expected"))
 
         # 旧モデルの主要な失敗は「再計算せず観測値を expected に書き写す」ことだった。
         # gold が expected != actual の例に限って、予測が両者を同じにしていないかを見る
@@ -609,6 +615,7 @@ METRIC_COLUMNS = {
         "primary_keys_match",
         "intermediate_value_match",
         "intermediate_operands_match",
+        "intermediate_consistent",
         "copied_observation",
         "strict_match_no_ruleid",
         "strict_match",
