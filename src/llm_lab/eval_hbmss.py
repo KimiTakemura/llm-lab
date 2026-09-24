@@ -745,6 +745,14 @@ def main(argv: list[str] | None = None) -> None:
         print_report(summary)
         return
 
+    # アダプタの存在はモデルを読む前に確かめる。14B のロードは 1 分以上かかるうえ、
+    # パスを間違えたまま素のモデルで評価が走ると「学習後の結果」として記録されかねない
+    if args.adapter and not (Path(args.adapter) / "adapter_config.json").is_file():
+        raise SystemExit(
+            f"アダプタが見つかりません: {args.adapter}\n"
+            f"  adapter_config.json がありません。シェル変数が空のまま展開されていないか確認してください"
+        )
+
     items = load_items(Path(args.data_dir), args.files, args.limit)
     print(f"{len(items)} 件を評価（レコード {len({i.id for i in items})} 件）: backend={args.backend} model={args.model_name} adapter={args.adapter}", file=sys.stderr)
 

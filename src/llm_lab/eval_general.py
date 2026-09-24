@@ -245,6 +245,9 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     _warn_if_no_langdetect()
+    if args.adapter and not (Path(args.adapter) / "adapter_config.json").is_file():
+        raise SystemExit(f"アダプタが見つかりません: {args.adapter}（adapter_config.json が無い）")
+
     items = load_items(args.suites, args.limit, args.seed)
     print(f"{len(items)} 問を評価: backend={args.backend} model={args.model_name} adapter={args.adapter}", file=sys.stderr)
 
