@@ -41,7 +41,7 @@ from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
-from llm_lab.hbmss_data import DEFAULT_DATA_DIR, build_datasets, load_sft_chat_template
+from llm_lab.hbmss_data import DEFAULT_DATA_DIR, build_datasets, check_data_dir, load_sft_chat_template
 from llm_lab.train import TARGET_MODULE_PRESETS  # Qwen3 の線形層名は OLMo-2 と同じ
 
 
@@ -191,6 +191,8 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     target_modules = TARGET_MODULE_PRESETS[args.target_modules]
     load_dotenv(".env")
+    # モデルを読む前に確認する。パスを間違えたまま 30 GB を取りに行かせない
+    check_data_dir(Path(args.data_dir))
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     # 公式テンプレートには generation マーカーが無いので SFT 用に差し替える。

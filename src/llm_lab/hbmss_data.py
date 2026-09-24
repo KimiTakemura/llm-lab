@@ -39,6 +39,23 @@ def load_sft_chat_template() -> str:
     return TEMPLATE_PATH.read_text(encoding="utf-8")
 
 
+def check_data_dir(data_dir: Path) -> None:
+    """データの所在をモデル読み込みより前に検査する。
+
+    クラウドでは HBMSS_DATA_DIR を export し忘れるとローカル既定のパスに落ちる。
+    トークナイザを読んだ後に気づくと、HF_HOME も外れていた場合に 30 GB の再取得が走る。
+    """
+    missing = [f for f in TRAIN_FILES if not (data_dir / f"{f}.jsonl").is_file()]
+    missing += [f"eval/{f}" for f in TRAIN_FILES if not (data_dir / "eval" / f"{f}.jsonl").is_file()]
+    if missing:
+        raise SystemExit(
+            f"データが見つかりません: {data_dir}\n"
+            f"  不足: {', '.join(missing[:4])}{' ほか' if len(missing) > 4 else ''}\n"
+            f"  --data-dir で指定するか、環境変数 HBMSS_DATA_DIR を設定してください"
+            f"（クラウドでは ~/.bashrc に書いておくと tmux でも引き継がれます）"
+        )
+
+
 def read_records(data_dir: Path, split: str, files: list[str] = TRAIN_FILES) -> list[dict]:
     """split は "train"（data/*.jsonl）か "eval"（data/eval/*.jsonl）。"""
     base = data_dir if split == "train" else data_dir / "eval"
