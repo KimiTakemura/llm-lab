@@ -300,8 +300,23 @@ JA_PROBES: list[tuple[str, list[tuple[str, dict]]]] = [
 ]
 
 # 学習データの出力契約が無関係な質問にも漏れ出していないかを測る印。
-# SFT 後に「何を聞いても findings JSON を返す」状態になっていれば、ここが跳ね上がる
-BLEED_MARKERS = ["findings", "severity", "ruleId", "sourceOrderKeys", "probableCauses", "appliedRules", "【事実】", "【仕様】", "【推測】"]
+# SFT 後に「何を聞いても findings JSON を返す」状態になっていれば、ここが跳ね上がる。
+#
+# JSON のキーは必ず引用符付きで照合する。素の英語の散文にも "findings" や "severity" は
+# 普通に現れるため（素の 14B で 200 問中 3 件が誤検出された）。camelCase の識別子と
+# 日本語タグは散文に出ないのでそのまま照合する
+BLEED_MARKERS = [
+    '"findings"',
+    '"severity"',
+    '"expected"',
+    "ruleId",
+    "sourceOrderKeys",
+    "probableCauses",
+    "appliedRules",
+    "【事実】",
+    "【仕様】",
+    "【推測】",
+]
 
 
 def format_bleed(response: str) -> list[str]:

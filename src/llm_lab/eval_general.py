@@ -83,9 +83,11 @@ def score_item(item: GeneralItem, response: str) -> dict:
         if item.suite == "ja":
             fn = JA_CHECKS[ins["id"]]
             try:
-                strict = bool(fn(response, ins["kwargs"]))
+                r = fn(response, ins["kwargs"])
             except (KeyError, TypeError, ValueError, AttributeError, IndexError):
-                strict = False
+                r = False
+            # None は「判定できなかった」。bool() で潰すと不正解として数えられてしまう
+            strict = None if r is None else bool(r)
             loose = strict
         else:
             strict = check_instruction(ins["id"], response, ins["kwargs"], loose=False)
@@ -165,6 +167,22 @@ def print_report(summary: dict) -> None:
             print(f"  {pid}: {markers}")
 
 
+def _warn_if_no_langdetect() -> None:
+    """langdetect が無いと言語判定の命令が丸ごと落ちる。黙って減るので目立たせる。
+
+    生成は無駄にならない（predictions.jsonl を --score-only で採点し直せる）。
+    """
+    try:
+        import langdetect  # noqa: F401
+    except ImportError:
+        print(
+            "警告: langdetect が無いため言語判定の命令（IFEval の language:response_language と "
+            "日本語プローブの ja:language）を判定できません。`uv pip install langdetect` のあと "
+            "--score-only で採点し直してください",
+            file=sys.stderr,
+        )
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="汎用能力の回帰テスト（IFEval + 日本語プローブ）", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     g = p.add_argument_group("suite")
@@ -226,6 +244,7 @@ def main(argv: list[str] | None = None) -> None:
         print_report(summary)
         return
 
+    _warn_if_no_langdetect()
     items = load_items(args.suites, args.limit, args.seed)
     print(f"{len(items)} 問を評価: backend={args.backend} model={args.model_name} adapter={args.adapter}", file=sys.stderr)
 
