@@ -16,3 +16,4 @@ liger-kernel==0.8.3
 wandb==0.28.1
 python-dotenv==1.2.2
 openai==2.52.0
+langdetect==1.0.9   # IFEval の language:response_language 判定（公式実装も langdetect を使う）
