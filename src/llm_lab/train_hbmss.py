@@ -62,7 +62,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["sdpa", "kernels-community/flash-attn", "flash_attention_2", "eager"],
         help="packing しないので sdpa で十分。FA2 は速度・メモリの改善用",
     )
-    g.add_argument("--max-length", type=int, default=4096, help="これを超える例は切り詰めず除外する")
+    g.add_argument(
+        "--max-length",
+        type=int,
+        default=5120,
+        help=(
+            "これを超える例は切り詰めず除外する。2026-09-25 改訂のデータは軌跡が最大 4,261 tok あり、"
+            "4096 だと train 7 件・eval 5 件が黙って落ちる"
+        ),
+    )
     g.add_argument(
         "--eval-size",
         type=int,

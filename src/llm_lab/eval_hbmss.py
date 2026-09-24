@@ -70,6 +70,7 @@ class EvalItem:
     tools: list[dict] | None
     gold_content: str
     gold_tool_calls: list[dict]  # [{"name", "arguments"(dict)}]
+    rule: str | None = None  # gold findings[0] の ruleId。ruleId 別の集計に使う
 
 
 def load_items(data_dir: Path, files: list[str], limit: int | None) -> list[EvalItem]:
@@ -111,6 +112,7 @@ def load_items(data_dir: Path, files: list[str], limit: int | None) -> list[Eval
                                 }
                                 for tc in (gold.get("tool_calls") or [])
                             ],
+                            rule=(rec.get("rule_ids") or [None])[0],
                         )
                     )
     return items
@@ -348,6 +350,11 @@ def score_item(item: EvalItem, parsed: Parsed, vocab: list[str]) -> dict:
                 strict_match_no_ruleid=False,
                 tag_ok=False,
                 probable_causes_consistent=False,
+                intermediate_present=False,
+                intermediate_operation_match=False,
+                intermediate_value_match=False,
+                intermediate_operands_match=False,
+                copied_observation=None,
             )
             r["forbidden_hits"] = count_forbidden([parsed.content], vocab, ctx)
             return r
@@ -383,6 +390,20 @@ def score_item(item: EvalItem, parsed: Parsed, vocab: list[str]) -> dict:
                 strict_nr = strict_nr and p is not None and p.get("severity") == g["severity"] and _eq(p.get("subject"), g.get("subject"))
                 strict_nr = strict_nr and all(_eq(p.get(k), g.get(k)) for k in ("expected", "actual", "diff"))
         r["strict_match_no_ruleid"] = bool(strict_nr)
+
+        # 2026-09-25 改訂で回答の先頭に intermediate（operation / operands / value）が付いた。
+        # 観測値のコピーで済ませられないようにするための教師信号なので、効いているかを直接測る
+        gi, pi = gold.get("intermediate"), obj.get("intermediate")
+        if isinstance(gi, dict):
+            r["intermediate_present"] = isinstance(pi, dict)
+            r["intermediate_operation_match"] = bool(pi) and pi.get("operation") == gi.get("operation")
+            r["intermediate_value_match"] = bool(pi) and _eq(pi.get("value"), gi.get("value"))
+            r["intermediate_operands_match"] = bool(pi) and _eq(pi.get("operands"), gi.get("operands"))
+
+        # 旧モデルの主要な失敗は「再計算せず観測値を expected に書き写す」ことだった。
+        # gold が expected != actual の例に限って、予測が両者を同じにしていないかを見る
+        if pp and not _eq(primary.get("expected"), primary.get("actual")):
+            r["copied_observation"] = _eq(pp.get("expected"), pp.get("actual"))
 
         r["tag_ok"] = _tags_ok(pf)
         # ERR なら原因候補が要る、OK なら要らない、という契約の整合
@@ -586,6 +607,9 @@ METRIC_COLUMNS = {
         "primary_values_match",
         "primary_subject_match",
         "primary_keys_match",
+        "intermediate_value_match",
+        "intermediate_operands_match",
+        "copied_observation",
         "strict_match_no_ruleid",
         "strict_match",
         "ruleid_set_match",
@@ -616,7 +640,11 @@ def _rate(rows: list[dict], metric: str):
 
 
 def _scenario_group(s: str) -> str:
-    return "H01-H06" if s.startswith("H") else s
+    """2026-09-25 改訂で scenario は 44 種類になった。個別に並べても読めないので S / K / H に畳む。
+
+    S = 学習に無いシナリオ族（未知ルール中心）、K = 既知ルールの対照群、H = 手書き held-out。
+    """
+    return s[0] if s and s[0] in "SKH" else s
 
 
 def summarize(rows: list[dict]) -> dict:
@@ -635,6 +663,9 @@ def summarize(rows: list[dict]) -> dict:
             ),
             "gold_outcome": lambda r: r["item"]["outcome"],
         }
+        if kind == "structured":
+            # 改訂後は「どのルールで解けているか」が判断材料になる
+            groupers["rule"] = lambda r: r["item"].get("rule") or "unknown"
         if kind == "tool_turn":
             groupers["turn"] = lambda r: f"turn{r['item']['turn']}"
         tables = {}
