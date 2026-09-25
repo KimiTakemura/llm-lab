@@ -14,17 +14,22 @@ import os
 import sys
 from glob import glob
 
+# subject と tag は学習後 1.000 で飽和しているので表からは外した（summary.json には残っている）。
+# 代わりに 2026-09-25 改訂で入った 3 つを出す: 再計算した値、その値と判定の整合、観測値のコピー率。
 TASK_COLS = [
     ("json_valid", "json"),
     ("primary_severity_match", "severity"),
     ("primary_values_match", "values"),
-    ("primary_subject_match", "subject"),
+    ("intermediate_value_match", "int_val"),
+    ("intermediate_consistent", "int_cons"),
+    ("copied_observation", "copied"),
     ("primary_keys_match", "keys"),
     ("strict_match_no_ruleid", "strict*"),
     ("strict_match", "strict"),
-    ("tag_ok", "tag"),
     ("truncated", "trunc"),
 ]
+
+SEVERITIES = ("OK", "WARN", "ERR", "NA")
 
 
 def _f(v) -> str:
@@ -71,16 +76,19 @@ def main(argv: list[str]) -> None:
                 f"{_f(l1.get('char_f1'))} | {st.get('forbidden_items', '-')} |"
             )
 
-        print("\n### severity 混同行列（gold → pred）\n")
-        print("| run | OK→OK | WARN→WARN | ERR→ERR | NA→NA | 出力なし |")
-        print("|" + "---|" * 6)
+        # 生の対角成分ではなく gold 行ごとの recall。ERR を何件中何件見逃したかを直接読むため
+        print("\n### severity 別 recall（正解 / gold 件数）\n")
+        print("| run | " + " | ".join(SEVERITIES) + " | 出力なし |")
+        print("|" + "---|" * (len(SEVERITIES) + 2))
         for name, s in task:
             c = s.get("severity_confusion", {})
+            cells = []
+            for g in SEVERITIES:
+                tot = sum(v for k, v in c.items() if k.startswith(f"{g}->"))
+                hit = c.get(f"{g}->{g}", 0)
+                cells.append(f"{hit}/{tot} = {hit / tot:.3f}" if tot else "-")
             na = sum(v for k, v in c.items() if k.endswith("->n/a"))
-            print(
-                f"| {short(name)} | {c.get('OK->OK', 0)} | {c.get('WARN->WARN', 0)} | "
-                f"{c.get('ERR->ERR', 0)} | {c.get('NA->NA', 0)} | {na} |"
-            )
+            print(f"| {short(name)} | " + " | ".join(cells) + f" | {na} |")
 
         print("\n### task_type 別\n")
         print("| run | task_type | n | json | severity | strict* |")
@@ -92,13 +100,19 @@ def main(argv: list[str]) -> None:
                     f"{_f(v.get('primary_severity_match'))} | {_f(v.get('strict_match_no_ruleid'))} |"
                 )
 
-        print("\n### シナリオ別 json_valid / severity\n")
-        print("| run | " + " | ".join(sorted({k for _, s in task for k in s.get("groups", {}).get("structured", {}).get("scenario", {})})) + " |")
+        # K（既知ルール）と S（未知ルール族）と H（手書き）の差が汎化の本命なので、
+        # severity に加えてコピー率も並べる
         scen = sorted({k for _, s in task for k in s.get("groups", {}).get("structured", {}).get("scenario", {})})
+        print("\n### シナリオ別 severity / copied\n")
+        print("| run | " + " | ".join(scen) + " |")
         print("|" + "---|" * (len(scen) + 1))
         for name, s in task:
             g = s.get("groups", {}).get("structured", {}).get("scenario", {})
-            print(f"| {short(name)} | " + " | ".join(f"{_f(g.get(k, {}).get('json_valid'))}/{_f(g.get(k, {}).get('primary_severity_match'))}" for k in scen) + " |")
+            cells = " | ".join(
+                f"{_f(g.get(k, {}).get('primary_severity_match'))}/{_f(g.get(k, {}).get('copied_observation'))}"
+                for k in scen
+            )
+            print(f"| {short(name)} | {cells} |")
 
     gen = _load("outputs/eval-general/*/summary.json", needle)
     if gen:
