@@ -123,6 +123,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     g.add_argument("--eval-steps", type=int, default=25)
     g.add_argument("--logging-steps", type=int, default=5)
     g.add_argument("--no-eval-on-start", dest="eval_on_start", action="store_false")
+    g.add_argument(
+        "--no-eval",
+        dest="do_eval",
+        action="store_false",
+        help=(
+            "学習中の eval loss を取らない。liger の fused CE は training モードでしか効かず、"
+            "eval では seq x 語彙の logits が実体化するため 8 GB 機では OOM する。"
+            "判定は eval_hbmss.py の生成採点で行うので、この loss が無くても意思決定には困らない"
+        ),
+    )
     g.add_argument("--no-save-adapter", dest="save_adapter", action="store_false")
     g.add_argument(
         "--save-epochs",
@@ -296,9 +306,9 @@ def main(argv: list[str] | None = None) -> None:
         gradient_checkpointing=args.gradient_checkpointing,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         use_liger_kernel=args.liger,
-        eval_strategy="steps",
+        eval_strategy="steps" if args.do_eval else "no",
         eval_steps=args.eval_steps,
-        eval_on_start=args.eval_on_start,
+        eval_on_start=args.eval_on_start and args.do_eval,
         logging_steps=args.logging_steps,
         save_strategy="steps" if args.save_steps else ("epoch" if args.save_epochs else "no"),
         save_steps=args.save_steps or 500,
@@ -322,7 +332,7 @@ def main(argv: list[str] | None = None) -> None:
         model=model,
         args=training_args,
         train_dataset=train_ds,
-        eval_dataset=eval_sets,
+        eval_dataset=eval_sets if args.do_eval else None,
         processing_class=tokenizer,
         peft_config=lora_config,
     )
