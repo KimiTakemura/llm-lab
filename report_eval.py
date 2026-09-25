@@ -52,12 +52,17 @@ def _load(pattern: str, needle: str) -> list[tuple[str, dict]]:
 
 
 def short(name: str) -> str:
-    """run 名は長いので、判別に効く末尾（checkpoint-NNN や zeroshot）を残す。"""
-    for marker in ("checkpoint-", "zeroshot"):
-        i = name.find(marker)
-        if i != -1:
-            return name[i:]
-    return name[-24:]
+    """run 名は長いので、判別に効く末尾（checkpoint-NNN や zeroshot）を残す。
+
+    checkpoint-NNN は学習 run をまたいで重複する（旧データの 340 と改訂版の 340 が
+    同じ表に別物として並ぶ）。直前のトークン（ep3 / ep6 など）まで含めて区別する。
+    """
+    i = name.find("checkpoint-")
+    if i != -1:
+        prefix = name[:i].rstrip("-").rsplit("-", 1)
+        return (prefix[-1] + "-" + name[i:]) if len(prefix) > 1 else name[i:]
+    i = name.find("zeroshot")
+    return name[i:] if i != -1 else name[-24:]
 
 
 def main(argv: list[str]) -> None:
